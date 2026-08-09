@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import random
+import statistics
 import time
 
 import pygame
@@ -174,6 +175,8 @@ class 可視化アプリ:
         self.accumulator = 0.0
         self.completion_times: dict[str, float] = {}
         self.processing_times: dict[str, float] = {}
+        self.benchmark_operations: dict[str, int] = {}
+        self.benchmark_cache: dict[tuple[str, str, int], tuple[float, int]] = {}
 
         self.data_slider = 数値スライダー(
             pygame.Rect(700, 862, 270, 8),
@@ -314,13 +317,15 @@ class 可視化アプリ:
         self.paused = False
         self.completion_times = {}
         self.processing_times = {}
+        self.benchmark_operations = {}
 
     def _スタート(self) -> None:
-        """開始待ちを解除して、自動実行と時間計測を始める。"""
+        """固定条件のベンチマーク後、アニメーションを開始する。"""
 
         if self._完了している():
             return
 
+        self._ベンチマークを準備する()
         self.started = True
         self.paused = False
 
@@ -330,6 +335,8 @@ class 可視化アプリ:
         if self._完了している():
             return
 
+        if not self.started:
+            self._ベンチマークを準備する()
         self.started = True
         self.paused = True
         self._1ステップ進める()
@@ -350,7 +357,8 @@ class 可視化アプリ:
             or len(self.sort_values) != self.data_slider.value
         ):
             self.sort_values = list(range(1, self.data_slider.value + 1))
-            random.shuffle(self.sort_values)
+            # 同じデータ量なら、リセット後も必ず同じ並びを再現する。
+            random.Random(self.data_slider.value).shuffle(self.sort_values)
         self.sort_runner = SortRunner(SORT_ALGORITHMS[self.sort_index], self.sort_values)
         self.sort_compare_runners = [
             SortRunner(algorithm, self.sort_values)
@@ -403,19 +411,84 @@ class 可視化アプリ:
         self,
         runner: SortRunner | PrimeRunner | SequenceRunner,
     ) -> None:
-        """1ステップ進め、完了した瞬間の経過時間を記録する。"""
+        """計測済みの結果を変えず、可視化だけを1ステップ進める。"""
 
         if self._ランナー完了(runner):
             return
 
         key = self._ランナーキー(runner)
-        started_at = time.perf_counter()
         runner.step()
-        processing_time = time.perf_counter() - started_at
-        self.processing_times[key] = self.processing_times.get(key, 0.0) + processing_time
 
         if self._ランナー完了(runner):
-            self.completion_times.setdefault(key, self.processing_times[key])
+            self.completion_times.setdefault(key, self.processing_times.get(key, 0.0))
+
+    def _ベンチマークを準備する(self) -> None:
+        """描画なしで測定し、表示速度に依存しない結果を固定する。"""
+
+        runners = (
+            self._比較ランナー一覧()
+            if self.view_mode == "compare"
+            else [self._現在のランナー()]
+        )
+
+        for runner in runners:
+            if runner is None:
+                continue
+
+            key = self._ランナーキー(runner)
+            cache_key = (self.mode, key, self.data_slider.value)
+
+            if cache_key not in self.benchmark_cache:
+                # 最初の1回はPythonやCPUのウォームアップとして結果から除外する。
+                self._ベンチマークを1回実行(runner)
+                samples = [
+                    self._ベンチマークを1回実行(runner)
+                    for _ in range(5)
+                ]
+                durations = [duration for duration, _ in samples]
+                operations = samples[0][1]
+                self.benchmark_cache[cache_key] = (
+                    statistics.median(durations),
+                    operations,
+                )
+
+            duration, operations = self.benchmark_cache[cache_key]
+            self.processing_times[key] = duration
+            self.benchmark_operations[key] = operations
+
+    def _ベンチマークを1回実行(
+        self,
+        source: SortRunner | PrimeRunner | SequenceRunner,
+    ) -> tuple[float, int]:
+        """新しいランナーを描画せず最後まで実行する。"""
+
+        runner = self._新しいベンチマークランナー(source)
+        started_at = time.perf_counter()
+
+        while not self._ランナー完了(runner):
+            runner.step()
+
+        duration = time.perf_counter() - started_at
+        return duration, self._ランナー操作回数(runner)
+
+    def _新しいベンチマークランナー(
+        self,
+        source: SortRunner | PrimeRunner | SequenceRunner,
+    ) -> SortRunner | PrimeRunner | SequenceRunner:
+        """画面表示用と同じ条件の、計測専用ランナーを作る。"""
+
+        if isinstance(source, SortRunner):
+            return SortRunner(source.algorithm, self.sort_values)
+        if isinstance(source, PrimeRunner):
+            return PrimeRunner(source.algorithm, limit=self.data_slider.value)
+        return SequenceRunner(source.algorithm)
+
+    def _現在のランナー(self) -> SortRunner | PrimeRunner | SequenceRunner | None:
+        return {
+            "sort": self.sort_runner,
+            "prime": self.prime_runner,
+            "sequence": self.sequence_runner,
+        }.get(self.mode)
 
     def _完了している(self) -> bool:
         if self.view_mode == "compare":
@@ -431,14 +504,14 @@ class 可視化アプリ:
 
     def _現在の操作回数(self) -> int:
         if self.view_mode == "compare":
-            return sum(self._ランナー操作回数(runner) for runner in self._比較ランナー一覧())
+            return sum(self._表示用操作回数(runner) for runner in self._比較ランナー一覧())
 
         if self.mode == "sort":
-            return self.sort_runner.operations
+            return self._表示用操作回数(self.sort_runner)
         if self.mode == "prime":
-            return self.prime_runner.state.operations
+            return self._表示用操作回数(self.prime_runner)
         if self.mode == "sequence":
-            return self.sequence_runner.state.operations
+            return self._表示用操作回数(self.sequence_runner)
         return 0
 
     def _比較ランナー一覧(self) -> list[SortRunner | PrimeRunner | SequenceRunner]:
@@ -456,6 +529,12 @@ class 可視化アプリ:
         if isinstance(runner, SortRunner):
             return runner.operations
         return runner.state.operations
+
+    def _表示用操作回数(self, runner: SortRunner | PrimeRunner | SequenceRunner) -> int:
+        """ベンチマーク済みなら、表示速度に依存しない処理回数を返す。"""
+
+        key = self._ランナーキー(runner)
+        return self.benchmark_operations.get(key, 0)
 
     def _ランナーキー(self, runner: SortRunner | PrimeRunner | SequenceRunner) -> str:
         if isinstance(runner, SortRunner):
@@ -845,7 +924,7 @@ class 可視化アプリ:
             self._比較情報を描く(
                 card,
                 runner.algorithm.info.name,
-                runner.operations,
+                self._表示用操作回数(runner),
                 self._ランナー完了(runner),
                 self.processing_times.get(self._ランナーキー(runner), 0.0),
                 self.completion_times.get(self._ランナーキー(runner)),
@@ -888,7 +967,7 @@ class 可視化アプリ:
             self._比較情報を描く(
                 card,
                 runner.algorithm.name,
-                runner.state.operations,
+                self._表示用操作回数(runner),
                 self._ランナー完了(runner),
                 self.processing_times.get(self._ランナーキー(runner), 0.0),
                 self.completion_times.get(self._ランナーキー(runner)),
@@ -936,7 +1015,7 @@ class 可視化アプリ:
             self._比較情報を描く(
                 card,
                 runner.algorithm.name,
-                runner.state.operations,
+                self._表示用操作回数(runner),
                 self._ランナー完了(runner),
                 self.processing_times.get(self._ランナーキー(runner), 0.0),
                 self.completion_times.get(self._ランナーキー(runner)),

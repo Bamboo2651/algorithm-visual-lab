@@ -78,3 +78,41 @@ def test_data_size_is_applied_to_each_category() -> None:
         assert app.sequence_runner.state.operations == 25
     finally:
         pygame.quit()
+
+
+def test_display_speed_does_not_change_benchmark_result() -> None:
+    app = 可視化アプリ()
+
+    try:
+        app.mode = "sort"
+        app.view_mode = "single"
+        app.sort_index = 0  # バブルソート
+        app.data_slider.value = 10
+        app.speed_slider.value = 1
+        app._現在をリセット()
+        first_values = app.sort_values.copy()
+        app._スタート()
+        first_time = app.processing_times["bubble"]
+        first_operations = app.benchmark_operations["bubble"]
+
+        for _ in range(1_000):
+            app._更新(1.0)
+            if app._完了している():
+                break
+
+        assert app._現在の完了時間() == first_time
+
+        app.speed_slider.value = 500
+        app._現在をリセット()
+        assert app.sort_values == first_values
+        app._スタート()
+
+        for _ in range(10):
+            app._更新(1.0)
+            if app._完了している():
+                break
+
+        assert app._現在の完了時間() == first_time
+        assert app.benchmark_operations["bubble"] == first_operations
+    finally:
+        pygame.quit()
