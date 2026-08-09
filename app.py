@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import random
+import time
 
 import pygame
 
@@ -83,14 +84,26 @@ class ボタン:
         文字を描く(screen, font, self.label, 文字色, self.rect.center, True)
 
 
-class 速度スライダー:
-    """1秒間に進めるステップ数を変更する。"""
+class 数値スライダー:
+    """指定範囲の整数をマウスで変更する共通スライダー。"""
 
-    def __init__(self) -> None:
-        self.rect = pygame.Rect(875, 862, 505, 8)
-        self.minimum = 1
-        self.maximum = 500
-        self.value = 50
+    def __init__(
+        self,
+        rect: pygame.Rect,
+        minimum: int,
+        maximum: int,
+        value: int,
+        label: str,
+        unit: str,
+        color: tuple[int, int, int],
+    ) -> None:
+        self.rect = rect
+        self.minimum = minimum
+        self.maximum = maximum
+        self.value = value
+        self.label = label
+        self.unit = unit
+        self.color = color
         self.dragging = False
 
     @property
@@ -98,7 +111,9 @@ class 速度スライダー:
         ratio = (self.value - self.minimum) / (self.maximum - self.minimum)
         return round(self.rect.left + self.rect.width * ratio)
 
-    def イベント処理(self, event: pygame.event.Event) -> None:
+    def イベント処理(self, event: pygame.event.Event) -> bool:
+        """値の確定時にTrueを返す。"""
+
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self.rect.inflate(24, 28).collidepoint(event.pos):
                 self.dragging = True
@@ -106,7 +121,11 @@ class 速度スライダー:
         elif event.type == pygame.MOUSEMOTION and self.dragging:
             self._座標から値を設定(event.pos[0])
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            was_dragging = self.dragging
             self.dragging = False
+            return was_dragging
+
+        return False
 
     def _座標から値を設定(self, x: int) -> None:
         x = max(self.rect.left, min(x, self.rect.right))
@@ -121,12 +140,12 @@ class 速度スライダー:
             self.handle_x - self.rect.left,
             self.rect.height,
         )
-        pygame.draw.rect(screen, 水色, active, border_radius=4)
+        pygame.draw.rect(screen, self.color, active, border_radius=4)
         pygame.draw.circle(screen, 文字色, (self.handle_x, self.rect.centery), 9)
         文字を描く(
             screen,
             font,
-            f"速度: 毎秒 {self.value} ステップ",
+            f"{self.label}: {self.value} {self.unit}",
             文字色,
             (self.rect.left, self.rect.top - 26),
         )
@@ -154,6 +173,26 @@ class 可視化アプリ:
         self.elapsed = 0.0
         self.accumulator = 0.0
         self.completion_times: dict[str, float] = {}
+        self.processing_times: dict[str, float] = {}
+
+        self.data_slider = 数値スライダー(
+            pygame.Rect(700, 862, 270, 8),
+            minimum=10,
+            maximum=300,
+            value=50,
+            label="データ量",
+            unit="件",
+            color=紫色,
+        )
+        self.speed_slider = 数値スライダー(
+            pygame.Rect(1040, 862, 340, 8),
+            minimum=1,
+            maximum=500,
+            value=50,
+            label="表示速度",
+            unit="ステップ/秒",
+            color=水色,
+        )
 
         self.sort_index = 0
         self.prime_index = 0
@@ -175,7 +214,6 @@ class 可視化アプリ:
         self.pause_button = ボタン(pygame.Rect(275, 842, 125, 42), "一時停止")
         self.step_button = ボタン(pygame.Rect(414, 842, 115, 42), "1ステップ")
         self.reset_button = ボタン(pygame.Rect(543, 842, 115, 42), "リセット")
-        self.speed_slider = 速度スライダー()
 
     def 実行(self) -> None:
         while self.running:
@@ -198,6 +236,8 @@ class 可視化アプリ:
             else:
                 self._共通操作(event)
                 self._一覧操作(event)
+                if self.data_slider.イベント処理(event):
+                    self._現在をリセット()
                 self.speed_slider.イベント処理(event)
 
     def _キー操作(self, key: int) -> None:
@@ -273,6 +313,7 @@ class 可視化アプリ:
         self.started = False
         self.paused = False
         self.completion_times = {}
+        self.processing_times = {}
 
     def _スタート(self) -> None:
         """開始待ちを解除して、自動実行と時間計測を始める。"""
@@ -303,8 +344,12 @@ class 可視化アプリ:
             self._reset_sequence()
 
     def _reset_sort(self, keep_values: bool = False) -> None:
-        if not keep_values or not self.sort_values:
-            self.sort_values = list(range(1, 51))
+        if (
+            not keep_values
+            or not self.sort_values
+            or len(self.sort_values) != self.data_slider.value
+        ):
+            self.sort_values = list(range(1, self.data_slider.value + 1))
             random.shuffle(self.sort_values)
         self.sort_runner = SortRunner(SORT_ALGORITHMS[self.sort_index], self.sort_values)
         self.sort_compare_runners = [
@@ -313,9 +358,12 @@ class 可視化アプリ:
         ]
 
     def _reset_prime(self) -> None:
-        self.prime_runner = PrimeRunner(PRIME_ALGORITHMS[self.prime_index], limit=300)
+        self.prime_runner = PrimeRunner(
+            PRIME_ALGORITHMS[self.prime_index],
+            limit=self.data_slider.value,
+        )
         self.prime_compare_runners = [
-            PrimeRunner(algorithm, limit=300)
+            PrimeRunner(algorithm, limit=self.data_slider.value)
             for algorithm in PRIME_ALGORITHMS
         ]
 
@@ -357,24 +405,28 @@ class 可視化アプリ:
     ) -> None:
         """1ステップ進め、完了した瞬間の経過時間を記録する。"""
 
-        if runner.done:
+        if self._ランナー完了(runner):
             return
 
+        key = self._ランナーキー(runner)
+        started_at = time.perf_counter()
         runner.step()
+        processing_time = time.perf_counter() - started_at
+        self.processing_times[key] = self.processing_times.get(key, 0.0) + processing_time
 
-        if runner.done:
-            self.completion_times.setdefault(self._ランナーキー(runner), self.elapsed)
+        if self._ランナー完了(runner):
+            self.completion_times.setdefault(key, self.processing_times[key])
 
     def _完了している(self) -> bool:
         if self.view_mode == "compare":
-            return all(runner.done for runner in self._比較ランナー一覧())
+            return all(self._ランナー完了(runner) for runner in self._比較ランナー一覧())
 
         if self.mode == "sort":
-            return self.sort_runner.done
+            return self._ランナー完了(self.sort_runner)
         if self.mode == "prime":
-            return self.prime_runner.done
+            return self._ランナー完了(self.prime_runner)
         if self.mode == "sequence":
-            return self.sequence_runner.done
+            return self._ランナー完了(self.sequence_runner)
         return False
 
     def _現在の操作回数(self) -> int:
@@ -410,12 +462,19 @@ class 可視化アプリ:
             return runner.algorithm.info.key
         return runner.algorithm.key
 
+    def _ランナー完了(self, runner: SortRunner | PrimeRunner | SequenceRunner) -> bool:
+        """数列では指定ステップ数への到達も完了として扱う。"""
+
+        if isinstance(runner, SequenceRunner):
+            return runner.done or runner.state.operations >= self.data_slider.value
+        return runner.done
+
     def _現在の完了時間(self) -> float | None:
         """個別表示、または全体比較の完了時間を返す。"""
 
         if self.view_mode == "compare":
             runners = self._比較ランナー一覧()
-            if not runners or not all(runner.done for runner in runners):
+            if not runners or not all(self._ランナー完了(runner) for runner in runners):
                 return None
             times = [
                 self.completion_times[self._ランナーキー(runner)]
@@ -430,9 +489,35 @@ class 可視化アプリ:
             "sequence": self.sequence_runner,
         }.get(self.mode)
 
-        if runner is None or not runner.done:
+        if runner is None or not self._ランナー完了(runner):
             return None
         return self.completion_times.get(self._ランナーキー(runner))
+
+    def _現在の計算時間(self) -> float:
+        """描画待ちを除いた、アルゴリズム処理だけの累計時間を返す。"""
+
+        if self.view_mode == "compare":
+            return sum(
+                self.processing_times.get(self._ランナーキー(runner), 0.0)
+                for runner in self._比較ランナー一覧()
+            )
+
+        runner = {
+            "sort": self.sort_runner,
+            "prime": self.prime_runner,
+            "sequence": self.sequence_runner,
+        }.get(self.mode)
+        return self.processing_times.get(self._ランナーキー(runner), 0.0) if runner else 0.0
+
+    @staticmethod
+    def _時間を表示(seconds: float | None) -> str:
+        """短い計算時間はミリ秒、長い時間は秒で読みやすく表示する。"""
+
+        if seconds is None:
+            return "--"
+        if seconds < 1:
+            return f"{seconds * 1000:.3f} ms"
+        return f"{seconds:.3f} 秒"
 
     def _現在の名前一覧(self) -> list[str]:
         if self.mode == "sort":
@@ -533,14 +618,14 @@ class 可視化アプリ:
 
     def _計測値を描く(self) -> None:
         operations = self._現在の操作回数()
-        per_second = operations / self.elapsed if self.elapsed else 0
+        processing_time = self._現在の計算時間()
+        per_second = operations / processing_time if processing_time else 0
         completion_time = self._現在の完了時間()
-        completion_label = f"{completion_time:.3f} 秒" if completion_time is not None else "--"
         labels = [
-            f"経過時間  {self.elapsed:.1f} 秒",
+            f"計算時間  {self._時間を表示(processing_time)}",
             f"処理回数  {operations:,}",
             f"毎秒処理  {per_second:,.1f}",
-            f"完了時間  {completion_label}",
+            f"完了時間  {self._時間を表示(completion_time)}",
         ]
 
         for index, label in enumerate(labels):
@@ -689,6 +774,7 @@ class 可視化アプリ:
         name: str,
         operations: int,
         done: bool,
+        processing_time: float,
         completion_time: float | None,
     ) -> None:
         """比較カードへ名前と速度情報を描く。"""
@@ -706,8 +792,8 @@ class 可視化アプリ:
             status = "実行中"
             status_color = 黄色
 
-        per_second = operations / self.elapsed if self.elapsed else 0
-        completion_label = f"{completion_time:.3f}秒" if completion_time is not None else "--"
+        per_second = operations / processing_time if processing_time else 0
+        completion_label = self._時間を表示(completion_time)
 
         文字を描く(
             self.screen,
@@ -749,12 +835,19 @@ class 可視化アプリ:
                 card_height,
             )
             pygame.draw.rect(self.screen, パネル色, card, border_radius=11)
-            pygame.draw.rect(self.screen, 緑色 if runner.done else 枠色, card, 2, border_radius=11)
+            pygame.draw.rect(
+                self.screen,
+                緑色 if self._ランナー完了(runner) else 枠色,
+                card,
+                2,
+                border_radius=11,
+            )
             self._比較情報を描く(
                 card,
                 runner.algorithm.info.name,
                 runner.operations,
-                runner.done,
+                self._ランナー完了(runner),
+                self.processing_times.get(self._ランナーキー(runner), 0.0),
                 self.completion_times.get(self._ランナーキー(runner)),
             )
 
@@ -785,12 +878,19 @@ class 可視化アプリ:
         for index, runner in enumerate(self.prime_compare_runners):
             card = pygame.Rect(330 + index * (card_width + gap), 180, card_width, 630)
             pygame.draw.rect(self.screen, パネル色, card, border_radius=12)
-            pygame.draw.rect(self.screen, 緑色 if runner.done else 枠色, card, 2, border_radius=12)
+            pygame.draw.rect(
+                self.screen,
+                緑色 if self._ランナー完了(runner) else 枠色,
+                card,
+                2,
+                border_radius=12,
+            )
             self._比較情報を描く(
                 card,
                 runner.algorithm.name,
                 runner.state.operations,
-                runner.done,
+                self._ランナー完了(runner),
+                self.processing_times.get(self._ランナーキー(runner), 0.0),
                 self.completion_times.get(self._ランナーキー(runner)),
             )
 
@@ -805,7 +905,7 @@ class 可視化アプリ:
                 square = pygame.Rect(start_x + column * cell, start_y + row * 32, 19, 26)
                 result = runner.state.results.get(number)
                 color = 緑色 if result is True else (13, 19, 34)
-                if number == runner.state.current and not runner.done:
+                if number == runner.state.current and not self._ランナー完了(runner):
                     color = 黄色
                 pygame.draw.rect(self.screen, color, square, border_radius=3)
 
@@ -826,12 +926,19 @@ class 可視化アプリ:
         for index, runner in enumerate(self.sequence_compare_runners):
             card = pygame.Rect(330 + index * (card_width + gap), 180, card_width, 630)
             pygame.draw.rect(self.screen, パネル色, card, border_radius=12)
-            pygame.draw.rect(self.screen, 緑色 if runner.done else 枠色, card, 2, border_radius=12)
+            pygame.draw.rect(
+                self.screen,
+                緑色 if self._ランナー完了(runner) else 枠色,
+                card,
+                2,
+                border_radius=12,
+            )
             self._比較情報を描く(
                 card,
                 runner.algorithm.name,
                 runner.state.operations,
-                runner.done,
+                self._ランナー完了(runner),
+                self.processing_times.get(self._ランナーキー(runner), 0.0),
                 self.completion_times.get(self._ランナーキー(runner)),
             )
 
@@ -863,6 +970,7 @@ class 可視化アプリ:
             self.reset_button,
         ):
             button.描く(self.screen, self.small_font)
+        self.data_slider.描く(self.screen, self.small_font)
         self.speed_slider.描く(self.screen, self.small_font)
 
 
