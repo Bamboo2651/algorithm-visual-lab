@@ -143,15 +143,17 @@ class 可視化アプリ:
 
         self.title_font = 日本語フォント(36, True)
         self.heading_font = 日本語フォント(24, True)
-        self.normal_font = 日本語フォント(19)
-        self.small_font = 日本語フォント(16)
+        self.normal_font = 日本語フォント(19, True)
+        self.small_font = 日本語フォント(16, True)
 
         self.running = True
         self.mode = "menu"
         self.view_mode = "single"
+        self.started = False
         self.paused = False
         self.elapsed = 0.0
         self.accumulator = 0.0
+        self.completion_times: dict[str, float] = {}
 
         self.sort_index = 0
         self.prime_index = 0
@@ -169,9 +171,10 @@ class 可視化アプリ:
         self._reset_sequence()
 
         self.home_button = ボタン(pygame.Rect(22, 842, 110, 42), "ホーム")
-        self.pause_button = ボタン(pygame.Rect(146, 842, 130, 42), "一時停止")
-        self.step_button = ボタン(pygame.Rect(290, 842, 120, 42), "1ステップ")
-        self.reset_button = ボタン(pygame.Rect(424, 842, 120, 42), "リセット")
+        self.start_button = ボタン(pygame.Rect(146, 842, 115, 42), "スタート")
+        self.pause_button = ボタン(pygame.Rect(275, 842, 125, 42), "一時停止")
+        self.step_button = ボタン(pygame.Rect(414, 842, 115, 42), "1ステップ")
+        self.reset_button = ボタン(pygame.Rect(543, 842, 115, 42), "リセット")
         self.speed_slider = 速度スライダー()
 
     def 実行(self) -> None:
@@ -201,9 +204,12 @@ class 可視化アプリ:
         if key == pygame.K_ESCAPE:
             self.mode = "menu"
         elif key == pygame.K_SPACE and self.mode != "menu":
-            self.paused = not self.paused
+            if not self.started:
+                self._スタート()
+            else:
+                self.paused = not self.paused
         elif key == pygame.K_RIGHT and self.mode != "menu":
-            self._1ステップ進める()
+            self._手動で1ステップ進める()
         elif key == pygame.K_r and self.mode != "menu":
             self._現在をリセット()
         elif key in (pygame.K_1, pygame.K_2, pygame.K_3):
@@ -220,10 +226,13 @@ class 可視化アプリ:
     def _共通操作(self, event: pygame.event.Event) -> None:
         if self.home_button.押された(event):
             self.mode = "menu"
+        elif self.start_button.押された(event):
+            self._スタート()
         elif self.pause_button.押された(event):
-            self.paused = not self.paused
+            if self.started:
+                self.paused = not self.paused
         elif self.step_button.押された(event):
-            self._1ステップ進める()
+            self._手動で1ステップ進める()
         elif self.reset_button.押された(event):
             self._現在をリセット()
 
@@ -261,7 +270,28 @@ class 可視化アプリ:
     def _時間をリセット(self) -> None:
         self.elapsed = 0.0
         self.accumulator = 0.0
+        self.started = False
         self.paused = False
+        self.completion_times = {}
+
+    def _スタート(self) -> None:
+        """開始待ちを解除して、自動実行と時間計測を始める。"""
+
+        if self._完了している():
+            return
+
+        self.started = True
+        self.paused = False
+
+    def _手動で1ステップ進める(self) -> None:
+        """自動実行せず、利用者の操作で1ステップだけ進める。"""
+
+        if self._完了している():
+            return
+
+        self.started = True
+        self.paused = True
+        self._1ステップ進める()
 
     def _現在をリセット(self) -> None:
         self._時間をリセット()
@@ -297,7 +327,7 @@ class 可視化アプリ:
         ]
 
     def _更新(self, delta_time: float) -> None:
-        if self.mode == "menu" or self.paused or self._完了している():
+        if self.mode == "menu" or not self.started or self.paused or self._完了している():
             return
 
         self.elapsed += delta_time
@@ -311,15 +341,29 @@ class 可視化アプリ:
     def _1ステップ進める(self) -> None:
         if self.view_mode == "compare":
             for runner in self._比較ランナー一覧():
-                runner.step()
+                self._ランナーを進める(runner)
             return
 
         if self.mode == "sort":
-            self.sort_runner.step()
+            self._ランナーを進める(self.sort_runner)
         elif self.mode == "prime":
-            self.prime_runner.step()
+            self._ランナーを進める(self.prime_runner)
         elif self.mode == "sequence":
-            self.sequence_runner.step()
+            self._ランナーを進める(self.sequence_runner)
+
+    def _ランナーを進める(
+        self,
+        runner: SortRunner | PrimeRunner | SequenceRunner,
+    ) -> None:
+        """1ステップ進め、完了した瞬間の経過時間を記録する。"""
+
+        if runner.done:
+            return
+
+        runner.step()
+
+        if runner.done:
+            self.completion_times.setdefault(self._ランナーキー(runner), self.elapsed)
 
     def _完了している(self) -> bool:
         if self.view_mode == "compare":
@@ -360,6 +404,35 @@ class 可視化アプリ:
         if isinstance(runner, SortRunner):
             return runner.operations
         return runner.state.operations
+
+    def _ランナーキー(self, runner: SortRunner | PrimeRunner | SequenceRunner) -> str:
+        if isinstance(runner, SortRunner):
+            return runner.algorithm.info.key
+        return runner.algorithm.key
+
+    def _現在の完了時間(self) -> float | None:
+        """個別表示、または全体比較の完了時間を返す。"""
+
+        if self.view_mode == "compare":
+            runners = self._比較ランナー一覧()
+            if not runners or not all(runner.done for runner in runners):
+                return None
+            times = [
+                self.completion_times[self._ランナーキー(runner)]
+                for runner in runners
+                if self._ランナーキー(runner) in self.completion_times
+            ]
+            return max(times) if times else None
+
+        runner = {
+            "sort": self.sort_runner,
+            "prime": self.prime_runner,
+            "sequence": self.sequence_runner,
+        }.get(self.mode)
+
+        if runner is None or not runner.done:
+            return None
+        return self.completion_times.get(self._ランナーキー(runner))
 
     def _現在の名前一覧(self) -> list[str]:
         if self.mode == "sort":
@@ -461,17 +534,26 @@ class 可視化アプリ:
     def _計測値を描く(self) -> None:
         operations = self._現在の操作回数()
         per_second = operations / self.elapsed if self.elapsed else 0
+        completion_time = self._現在の完了時間()
+        completion_label = f"{completion_time:.3f} 秒" if completion_time is not None else "--"
         labels = [
             f"経過時間  {self.elapsed:.1f} 秒",
             f"処理回数  {operations:,}",
             f"毎秒処理  {per_second:,.1f}",
+            f"完了時間  {completion_label}",
         ]
 
         for index, label in enumerate(labels):
-            rect = pygame.Rect(330 + index * 355, 105, 330, 52)
+            rect = pygame.Rect(330 + index * 270, 105, 258, 52)
             pygame.draw.rect(self.screen, パネル色, rect, border_radius=9)
             pygame.draw.rect(self.screen, 枠色, rect, 1, border_radius=9)
-            文字を描く(self.screen, self.normal_font, label, (水色, 紫色, 緑色)[index], (rect.left + 16, rect.top + 14))
+            文字を描く(
+                self.screen,
+                self.small_font,
+                label,
+                (水色, 紫色, 緑色, 黄色)[index],
+                (rect.left + 14, rect.top + 14),
+            )
 
     def _ソートを描く(self) -> None:
         runner = self.sort_runner
@@ -607,12 +689,25 @@ class 可視化アプリ:
         name: str,
         operations: int,
         done: bool,
+        completion_time: float | None,
     ) -> None:
         """比較カードへ名前と速度情報を描く。"""
 
-        status = "完了" if done else "実行中"
-        status_color = 緑色 if done else 黄色
+        if done:
+            status = "完了"
+            status_color = 緑色
+        elif not self.started:
+            status = "開始待ち"
+            status_color = 補助文字色
+        elif self.paused:
+            status = "一時停止"
+            status_color = 黄色
+        else:
+            status = "実行中"
+            status_color = 黄色
+
         per_second = operations / self.elapsed if self.elapsed else 0
+        completion_label = f"{completion_time:.3f}秒" if completion_time is not None else "--"
 
         文字を描く(
             self.screen,
@@ -624,9 +719,16 @@ class 可視化アプリ:
         文字を描く(
             self.screen,
             self.small_font,
-            f"{status}  処理 {operations:,}  毎秒 {per_second:,.0f}",
+            f"{status}　処理回数 {operations:,}",
             status_color,
             (rect.left + 12, rect.top + 38),
+        )
+        文字を描く(
+            self.screen,
+            self.small_font,
+            f"毎秒 {per_second:,.0f}　完了時間 {completion_label}",
+            補助文字色,
+            (rect.left + 12, rect.top + 62),
         )
 
     def _ソート比較を描く(self) -> None:
@@ -653,9 +755,10 @@ class 可視化アプリ:
                 runner.algorithm.info.name,
                 runner.operations,
                 runner.done,
+                self.completion_times.get(self._ランナーキー(runner)),
             )
 
-            chart = pygame.Rect(card.left + 10, card.top + 70, card.width - 20, card.height - 80)
+            chart = pygame.Rect(card.left + 10, card.top + 92, card.width - 20, card.height - 102)
             values = runner.state.values
             maximum = max(values)
             bar_width = chart.width / len(values)
@@ -688,12 +791,13 @@ class 可視化アプリ:
                 runner.algorithm.name,
                 runner.state.operations,
                 runner.done,
+                self.completion_times.get(self._ランナーキー(runner)),
             )
 
             columns = 20
             cell = 23
             start_x = card.left + 31
-            start_y = card.top + 83
+            start_y = card.top + 105
 
             for offset, number in enumerate(range(2, runner.state.limit + 1)):
                 column = offset % columns
@@ -728,9 +832,10 @@ class 可視化アプリ:
                 runner.algorithm.name,
                 runner.state.operations,
                 runner.done,
+                self.completion_times.get(self._ランナーキー(runner)),
             )
 
-            chart = pygame.Rect(card.left + 14, card.top + 78, card.width - 28, 475)
+            chart = pygame.Rect(card.left + 14, card.top + 102, card.width - 28, 450)
             pygame.draw.rect(self.screen, (13, 19, 34), chart, border_radius=8)
 
             if runner.algorithm.key == "recaman":
@@ -748,8 +853,15 @@ class 可視化アプリ:
 
     def _操作欄を描く(self) -> None:
         pygame.draw.line(self.screen, 枠色, (0, 825), (幅, 825))
+        self.start_button.label = "開始済み" if self.started else "スタート"
         self.pause_button.label = "再開" if self.paused else "一時停止"
-        for button in (self.home_button, self.pause_button, self.step_button, self.reset_button):
+        for button in (
+            self.home_button,
+            self.start_button,
+            self.pause_button,
+            self.step_button,
+            self.reset_button,
+        ):
             button.描く(self.screen, self.small_font)
         self.speed_slider.描く(self.screen, self.small_font)
 
