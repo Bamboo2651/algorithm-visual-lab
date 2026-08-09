@@ -478,7 +478,15 @@ class 可視化アプリ:
         baseline = chart.centery
         pygame.draw.line(self.screen, 枠色, (chart.left + 15, baseline), (chart.right - 15, baseline))
 
-        for index, (start, end) in enumerate(zip(values[-301:-1], values[-300:]), start=max(1, len(values) - 300)):
+        # 同じ表示範囲から「現在の値」と「次の値」の組を作る。
+        # 別々の負数スライスを直接zipすると、要素数が少ないときに
+        # 先頭同士がずれるため、先にvisibleへ切り出してから1つずらす。
+        visible = values[-301:]
+
+        for index, (start, end) in enumerate(
+            zip(visible, visible[1:]),
+            start=max(1, len(values) - 300),
+        ):
             center = (start + end) / 2
             radius = abs(end - start) / 2
             direction = -1 if index % 2 else 1
