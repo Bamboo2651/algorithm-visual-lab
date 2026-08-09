@@ -27,7 +27,6 @@ def test_algorithm_does_not_run_before_start() -> None:
     finally:
         pygame.quit()
 
-
 def test_completion_time_is_recorded_after_start() -> None:
     app = 可視化アプリ()
 
@@ -48,4 +47,3 @@ def test_completion_time_is_recorded_after_start() -> None:
         assert app._現在の完了時間() is not None
     finally:
         pygame.quit()
-
