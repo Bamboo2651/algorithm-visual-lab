@@ -1,16 +1,96 @@
+# アルゴリズム可視化ラボ
 
-# Algorithm Visual Lab
+PythonとPygameで、アルゴリズムの途中経過と処理速度を可視化する学習用アプリです。
 
-PythonとPygameで、アルゴリズムや計算速度を可視化する学習用アプリです。
+## 収録アルゴリズム
 
-## 作成予定のモード
+### ソート
 
-- ソートアルゴリズム競争
-- 素数探索
-- Recamán数列アート
+- バブルソート
+- 挿入ソート
+- 選択ソート
+- カクテルソート
+- シェルソート
+- マージソート
+- クイックソート
+- ヒープソート
+- 計数ソート
 
-## 使用技術
+### 素数探索
 
-- Python 3.13
-- Pygame
-- pytest
+- 試し割り法
+- エラトステネスのふるい
+
+### 数列
+
+- レカマン数列
+- コラッツ数列
+
+## 環境構築
+
+このプロジェクトはPython 3.14と、Python 3.14に対応している `pygame-ce` を使用します。
+
+```powershell
+py -3.14 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
+### `python -m pip` を使う理由
+
+パッケージは次のように直接インストールすることもできます。
+
+```powershell
+pip install flask
+```
+
+このプロジェクトでは次の形式を使用します。
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+- `python -m pip` は、現在選択しているPython環境のpipを実行する
+- `-r requirements.txt` は、ファイルに記録されたパッケージをまとめて導入する
+- 別のPythonへ誤ってインストールする事故を減らせる
+- 別のPCでも必要なパッケージを再現できる
+
+インストールする名前は `pygame-ce` ですが、プログラムでは通常どおり `import pygame` と書きます。
+
+## 起動方法
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python app.py
+```
+
+## 操作方法
+
+- マウス: モードやアルゴリズムを選択
+- `1` / `2` / `3`: ソート、素数探索、数列へ移動
+- `Space`: 一時停止・再開
+- `→`: 1ステップ進める
+- `R`: 現在のアルゴリズムをリセット
+- `Esc`: ホームへ戻る
+- 画面下のスライダー: 1秒間に進めるステップ数を変更
+
+## ファイル構成
+
+```text
+app.py                      GUIとユーザー操作
+algorithms/
+  sorting/                  ソート（1アルゴリズム1ファイル）
+  primes/                   素数探索
+  sequences/                数列
+tests/                      アルゴリズムの自動テスト
+```
+
+アルゴリズム本体とPygameの描画処理を分離しています。アルゴリズムを復習するときは、`algorithms/` 内の対象ファイルだけを読めます。
+
+## テスト
+
+```powershell
+python -m pytest -q
+```
+
+すべてのソート結果、素数一覧、数列の代表値を自動確認します。
